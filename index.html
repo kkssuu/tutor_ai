@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>필기 녹화</title>
+
+<!-- 홈 화면에 추가하면 사파리 UI 없이 전체화면으로 뜬다 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="필기 녹화">
+<meta name="theme-color" content="#111111">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+
+<style>
+  :root{
+    --line:#e2e2e4; --ink:#111; --dim:#767680; --hi:#0a7; --warn:#c4500b;
+    --bg:#fff; --panel:#f7f7f8;
+    --top:env(safe-area-inset-top); --bot:env(safe-area-inset-bottom);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --line:#33333a; --ink:#f2f2f4; --dim:#9a9aa4; --bg:#0d0d10; --panel:#16161a; }
+  }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; -webkit-user-select:none; user-select:none; }
+  html,body{ height:100%; overflow:hidden; overscroll-behavior:none; }
+  body{ margin:0; background:var(--bg); color:var(--ink);
+        font:15px/1.45 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+        padding-top:var(--top); padding-bottom:var(--bot); display:flex; flex-direction:column; }
+
+  header{ display:flex; gap:6px; align-items:center; padding:8px 10px;
+          border-bottom:1px solid var(--line); flex:0 0 auto; }
+  button{ font:inherit; font-size:15px; padding:9px 14px; min-height:44px; border:1px solid var(--line);
+          background:var(--bg); color:var(--ink); border-radius:10px; }
+  button:active{ transform:scale(.97); }
+  button.on{ background:var(--ink); color:var(--bg); border-color:var(--ink); }
+  button.ghost{ border-color:transparent; }
+  .spacer{ flex:1 }
+
+  main{ flex:1 1 auto; display:flex; min-height:0; }
+  #stage{ flex:1 1 auto; overflow:auto; -webkit-overflow-scrolling:touch;
+          display:flex; flex-direction:column; align-items:center; padding:14px; }
+  #sheet{ flex:0 0 auto; }
+  #stem{ border:1px solid var(--line); border-bottom:none; border-radius:12px 12px 0 0;
+         padding:12px 14px; background:var(--panel); }
+  #stemMath{ font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:19px; margin-top:6px; }
+  #work{ border:1px solid var(--line); border-radius:0 0 12px 12px; touch-action:none; position:relative; }
+  #work canvas{ display:block; width:100%; height:100%; touch-action:none; }
+
+  aside{ flex:0 0 320px; border-left:1px solid var(--line); background:var(--panel);
+         overflow:auto; -webkit-overflow-scrolling:touch; padding:12px; font-size:14px; }
+  aside.hidden{ display:none }
+  .card{ border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:10px; background:var(--bg); }
+  .card b{ display:block; margin-bottom:6px; }
+  .row{ display:flex; justify-content:space-between; gap:8px; padding:3px 0; }
+  .k{ color:var(--dim) } .v{ font-variant-numeric:tabular-nums; font-weight:640 }
+  .note{ color:var(--dim); font-size:12.5px; margin:8px 0 0; line-height:1.45 }
+  .good{ color:var(--hi) } .bad{ color:var(--warn) }
+  input[type=range]{ width:100%; height:36px; }
+  label{ display:block; margin:10px 0 2px; color:var(--dim); font-size:12.5px }
+  #card{ height:54px; border:2px dashed var(--warn); border-radius:6px; display:flex;
+         align-items:center; justify-content:center; color:var(--warn); font-size:12px; }
+  textarea{ width:100%; font:inherit; border:1px solid var(--line); border-radius:10px;
+            padding:8px; background:var(--bg); color:var(--ink); -webkit-user-select:text; user-select:text; }
+  #toast{ position:fixed; left:50%; bottom:calc(24px + var(--bot)); transform:translateX(-50%);
+          background:var(--ink); color:var(--bg); padding:10px 16px; border-radius:20px;
+          font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s; z-index:9 }
+  #toast.show{ opacity:1 }
+  @media (max-width:820px){ aside{ position:fixed; inset:var(--top) 0 var(--bot) 0; z-index:8; flex:none; width:100% } }
+</style>
+</head>
+<body>
+
+<header>
+  <button id="penMode" class="on">✏️ 펜</button>
+  <button id="eraseMode">지우개</button>
+  <button id="undo" class="ghost">되돌리기</button>
+  <span class="spacer"></span>
+  <button id="nextProblem">다음 문제</button>
+  <button id="export" class="on">내보내기</button>
+  <button id="panelBtn" class="ghost">⚙︎</button>
+</header>
+
+<main>
+  <div id="stage">
+    <div id="sheet">
+      <div id="stem">
+        <div id="stemText">다음 방정식을 푸시오.</div>
+        <div id="stemMath">3x + 5 = 20</div>
+      </div>
+      <div id="work"><canvas id="cv"></canvas></div>
+    </div>
+  </div>
+
+  <aside id="panel">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <b style="flex:1">계측 패널</b>
+      <button class="ghost" id="closePanel">닫기</button>
+    </div>
+
+    <div class="card">
+      <b>1 · 물리 치수 보정</b>
+      <div id="card">신용카드를 여기 대세요</div>
+      <input type="range" id="cardW" min="120" max="760" value="330">
+      <div class="row"><span class="k">1mm =</span><span class="v" id="pxmm">–</span></div>
+      <p class="note">신용카드 가로는 세계 표준 85.6mm입니다. 카드를 화면에 대고 점선 상자가
+        카드와 정확히 같아질 때까지 맞추세요. CSS 픽셀은 기기마다 실제 크기가 달라
+        이 과정 없이는 mm를 알 수 없습니다.</p>
+    </div>
+
+    <div class="card">
+      <b>2 · 풀이 영역 가로폭</b>
+      <label>가로폭 (mm) — 이 값이 좌표 단위 U가 됩니다</label>
+      <input type="range" id="workW" min="60" max="280" value="150">
+      <div class="row"><span class="k">가로폭 = 1U</span><span class="v" id="wmm">–</span></div>
+      <label>세로 높이 (가로폭 대비)</label>
+      <input type="range" id="workH" min="40" max="160" value="95">
+      <div class="row"><span class="k">높이</span><span class="v" id="hmm">–</span></div>
+    </div>
+
+    <div class="card">
+      <b>3 · 써 보고 측정</b>
+      <div class="row"><span class="k">획 수</span><span class="v" id="nStrokes">0</span></div>
+      <div class="row"><span class="k">글씨 높이(중앙값)</span><span class="v" id="xh">–</span></div>
+      <div class="row"><span class="k">한 줄 글자 수(추정)</span><span class="v" id="perLine">–</span></div>
+      <p class="note">한 줄에 <b>10~14자</b>가 들어가는 폭을 찾으세요. 그보다 적으면 가로폭을 늘립니다.
+        글씨 높이는 보통 4~6mm, 초등 저학년은 8mm를 넘기도 합니다.</p>
+    </div>
+
+    <div class="card">
+      <b>기기 진단</b>
+      <div class="row"><span class="k">펜 인식</span><span class="v" id="dPen">–</span></div>
+      <div class="row"><span class="k">필압</span><span class="v" id="dPress">–</span></div>
+      <div class="row"><span class="k">기울기</span><span class="v" id="dTilt">–</span></div>
+      <div class="row"><span class="k">coalesced</span><span class="v" id="dCoal">–</span></div>
+      <div class="row"><span class="k">샘플레이트</span><span class="v" id="dRate">–</span></div>
+      <div class="row"><span class="k">DPR</span><span class="v" id="dDpr">–</span></div>
+      <p class="note">getCoalescedEvents가 없으면 샘플이 절반으로 깎여 망설임·속도 신호가
+        뭉개집니다. 그 기기는 임계값을 따로 잡아야 합니다.</p>
+    </div>
+
+    <div class="card">
+      <b>지문 바꾸기</b>
+      <textarea id="edit" rows="3">다음 방정식을 푸시오.
+3x + 5 = 20</textarea>
+      <p class="note">첫 줄은 설명, 나머지는 수식으로 표시됩니다.</p>
+    </div>
+
+    <div class="card">
+      <b>녹화</b>
+      <div class="row"><span class="k">문제</span><span class="v" id="dProb">p01</span></div>
+      <div class="row"><span class="k">누적 op</span><span class="v" id="dOps">0</span></div>
+      <div class="row"><span class="k">경과</span><span class="v" id="dT">0초</span></div>
+    </div>
+  </aside>
+</main>
+
+<div id="toast"></div>
+
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+const T0 = performance.now();
+let pxPerMm = 1, workWidthPx = 1, mode = 'pen', seq = 0, strokeSeq = 0;
+let problems = [], cur = null, heights = [], rateSamples = [];
+const live = new Map();
+const diag = { pen:false, pressure:false, tilt:false,
+               coalesced: !!(window.PointerEvent && 'getCoalescedEvents' in PointerEvent.prototype) };
+
+const cv = $('cv'), ctx = cv.getContext('2d'), work = $('work');
+
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show');
+  clearTimeout(t._x); t._x=setTimeout(()=>t.classList.remove('show'),1800); }
+
+function newProblem(){
+  const id = 'p' + String(problems.length+1).padStart(2,'0');
+  cur = { problemId:id, gradeBand:'m1', checkReply:'ok', note:'실기기 녹화', ops:[] };
+  problems.push(cur); $('dProb').textContent = id;
+  live.clear(); heights = []; redraw();
+}
+
+// ── 치수 ──────────────────────────────────────────────
+function recalc(){
+  const cardPx = +$('cardW').value;
+  $('card').style.width = cardPx + 'px';
+  pxPerMm = cardPx / 85.6;
+
+  const wmm = +$('workW').value, hRatio = +$('workH').value / 100;
+  workWidthPx = wmm * pxPerMm;
+  const wpx = Math.round(workWidthPx);
+  work.style.width = $('stem').style.width = wpx + 'px';
+  work.style.height = Math.round(workWidthPx * hRatio) + 'px';
+
+  const dpr = window.devicePixelRatio || 1;
+  cv.width  = Math.round(work.clientWidth  * dpr);
+  cv.height = Math.round(work.clientHeight * dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.lineCap = ctx.lineJoin = 'round';
+
+  $('pxmm').textContent = pxPerMm.toFixed(2) + ' px';
+  $('wmm').textContent  = wmm + ' mm';
+  $('hmm').textContent  = Math.round(wmm * hRatio) + ' mm';
+  $('dDpr').textContent = dpr;
+  redraw(); report();
+}
+$('cardW').oninput = recalc; $('workW').oninput = recalc; $('workH').oninput = recalc;
+window.addEventListener('resize', recalc);
+window.addEventListener('orientationchange', () => setTimeout(recalc, 250));
+
+function redraw(){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.strokeStyle = getComputedStyle(document.body).color;
+  for (const s of live.values()){
+    if (s.erased) continue;
+    ctx.beginPath();
+    s.points.forEach((p,i)=>{ const x=p.x*workWidthPx, y=p.y*workWidthPx; i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+    ctx.lineWidth = 1.8; ctx.stroke();
+  }
+}
+
+// ── 입력 ──────────────────────────────────────────────
+let active = null;
+function toU(e){
+  const r = cv.getBoundingClientRect();
+  return { x:(e.clientX-r.left)/workWidthPx, y:(e.clientY-r.top)/workWidthPx,
+           t:Math.round(e.timeStamp - T0),
+           p: e.pressure>0 ? +e.pressure.toFixed(3) : 0.5,
+           tx: e.tiltX||undefined, ty: e.tiltY||undefined };
+}
+
+cv.addEventListener('pointerdown', e=>{
+  if (e.pointerType === 'touch') return;              // 손바닥·손가락은 잉크가 아니다
+  if (e.pointerType === 'pen') diag.pen = true;
+  e.preventDefault(); cv.setPointerCapture(e.pointerId);
+  if (mode === 'erase'){ eraseAt(toU(e)); return; }
+  active = { id:'s'+(++strokeSeq), points:[toU(e)] };
+}, {passive:false});
+
+cv.addEventListener('pointermove', e=>{
+  if (e.pointerType === 'touch') return;
+  if (mode === 'erase'){ if (e.buttons) eraseAt(toU(e)); return; }
+  if (!active) return;
+  e.preventDefault();
+  const samples = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+  for (const s of samples){
+    if (s.pressure > 0 && s.pressure !== 0.5) diag.pressure = true;
+    if (s.tiltX || s.tiltY) diag.tilt = true;
+    active.points.push(toU(s));
+  }
+  const n = active.points.length;
+  if (n > 1){
+    const a = active.points[n-2], b = active.points[n-1];
+    ctx.beginPath(); ctx.moveTo(a.x*workWidthPx, a.y*workWidthPx);
+    ctx.lineTo(b.x*workWidthPx, b.y*workWidthPx);
+    ctx.lineWidth = 1.8; ctx.stroke();
+  }
+}, {passive:false});
+
+function endStroke(){
+  if (!active) return;
+  const pts = active.points;
+  if (pts.length < 2){ active = null; return; }
+  const t0 = pts[0].t, t1 = pts[pts.length-1].t;
+  if (t1 > t0) rateSamples.push(pts.length/(t1-t0)*1000);
+  if (rateSamples.length > 24) rateSamples.shift();
+
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9,len=0;
+  pts.forEach((p,i)=>{ x0=Math.min(x0,p.x); y0=Math.min(y0,p.y);
+    x1=Math.max(x1,p.x); y1=Math.max(y1,p.y);
+    if(i) len += Math.hypot(p.x-pts[i-1].x, p.y-pts[i-1].y); });
+
+  const stroke = { id:active.id, tool:'pen', frame:'work', points:pts, t0, t1,
+    bbox:{x0,y0,x1,y1}, pathLen:+len.toFixed(5),
+    meanSpeed: t1>t0 ? +(len/(t1-t0)).toFixed(7) : 0,
+    erasedAt:null, erasedByOp:null, lineId:null };
+  cur.ops.push({ seq:++seq, t:t1, kind:'draw', stroke });
+  live.set(stroke.id, { points:pts, erased:false, bbox:stroke.bbox });
+  heights.push(y1-y0);
+  active = null; report();
+}
+['pointerup','pointercancel','pointerleave'].forEach(ev => cv.addEventListener(ev, endStroke));
+
+// 획 단위 지우개. 픽셀 지우개는 넣지 않는다 — 지운 이력의 의미가 사라진다.
+function eraseAt(u){
+  const hit = [];
+  for (const [id,s] of live){
+    if (s.erased) continue;
+    const b=s.bbox, pad=0.010;
+    if (u.x<b.x0-pad||u.x>b.x1+pad||u.y<b.y0-pad||u.y>b.y1+pad) continue;
+    if (s.points.some(p=>Math.hypot(p.x-u.x,p.y-u.y) < 0.014)) hit.push(id);
+  }
+  if (!hit.length) return;
+  hit.forEach(id => live.get(id).erased = true);
+  cur.ops.push({ seq:++seq, t:u.t, kind:'erase', targets:hit, by:'eraser' });
+  redraw(); report();
+}
+
+// ── 보고 ──────────────────────────────────────────────
+const median = a => a.length ? [...a].sort((x,y)=>x-y)[a.length>>1] : 0;
+function report(){
+  $('nStrokes').textContent = [...live.values()].filter(s=>!s.erased).length;
+  const xhU = median(heights), wmm = +$('workW').value;
+  if (xhU > 0){
+    $('xh').textContent = (xhU*wmm).toFixed(1) + ' mm';
+    $('perLine').textContent = Math.round(1/(xhU*0.95)) + ' 자';
+  }
+  $('dPen').innerHTML   = diag.pen ? '<span class="good">감지됨</span>' : '<span class="bad">아직 없음</span>';
+  $('dPress').innerHTML = diag.pressure ? '<span class="good">지원</span>' : '<span class="bad">미지원</span>';
+  $('dTilt').textContent = diag.tilt ? '지원' : '미지원';
+  $('dCoal').innerHTML  = diag.coalesced ? '<span class="good">있음</span>' : '<span class="bad">없음</span>';
+  const r = median(rateSamples);
+  $('dRate').textContent = r ? Math.round(r)+' Hz' : '–';
+  $('dOps').textContent = problems.reduce((a,p)=>a+p.ops.length,0);
+  $('dT').textContent = Math.round((performance.now()-T0)/1000) + '초';
+}
+setInterval(report, 1000);
+
+// ── 조작 ──────────────────────────────────────────────
+$('penMode').onclick = () => { mode='pen'; $('penMode').classList.add('on'); $('eraseMode').classList.remove('on'); };
+$('eraseMode').onclick = () => { mode='erase'; $('eraseMode').classList.add('on'); $('penMode').classList.remove('on'); };
+$('undo').onclick = () => {
+  for (let i=cur.ops.length-1;i>=0;i--){
+    if (cur.ops[i].kind === 'draw'){
+      cur.ops.push({ seq:++seq, t:Math.round(performance.now()-T0), kind:'undo', targetSeq:cur.ops[i].seq });
+      const rec = live.get(cur.ops[i].stroke.id); if (rec) rec.erased = true;
+      break;
+    }
+  }
+  redraw(); report();
+};
+$('nextProblem').onclick = () => { newProblem(); report(); toast('새 문제 시작'); };
+$('panelBtn').onclick = () => $('panel').classList.toggle('hidden');
+$('closePanel').onclick = () => $('panel').classList.add('hidden');
+$('edit').oninput = e => {
+  const [a,...rest] = e.target.value.split('\n');
+  $('stemText').textContent = a||''; $('stemMath').textContent = rest.join('  ');
+};
+
+function payload(){
+  const wmm = +$('workW').value;
+  return { version:1,
+    sittingId: 'rec-' + new Date().toISOString().slice(0,19).replace(/[:T-]/g,''),
+    capture: { layoutVersion:1, unit:'workWidth', workWidthMm:wmm,
+      workHeightMm: Math.round(wmm * (+$('workH').value/100)),
+      pxPerMm:+pxPerMm.toFixed(3),
+      medianGlyphHeightMm:+(median(heights)*wmm).toFixed(2),
+      device:{ ua:navigator.userAgent, dpr:window.devicePixelRatio||1, pen:diag.pen,
+        pressure:diag.pressure, tilt:diag.tilt, coalesced:diag.coalesced,
+        sampleRateHz: Math.round(median(rateSamples))||null } },
+    profile:{ id:'rec', frustrationThresholdMs:300000, baselineSpeed:0.00021 },
+    problems: problems.filter(p=>p.ops.length) };
+}
+
+$('export').onclick = async () => {
+  const out = payload();
+  if (!out.problems.length){ toast('아직 쓴 게 없습니다'); return; }
+  const name = out.sittingId + '.ink.json';
+  const text = JSON.stringify(out);
+  const file = new File([text], name, { type:'application/json' });
+  // 아이패드에서는 공유 시트가 훨씬 편하다 (파일 앱에 저장 / 에어드롭)
+  if (navigator.canShare && navigator.canShare({ files:[file] })){
+    try { await navigator.share({ files:[file], title:name }); toast('공유 시트 열림'); return; }
+    catch(e){ if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text],{type:'application/json'}));
+  a.download = name; a.click(); toast('다운로드 시작');
+};
+
+if ('serviceWorker' in navigator && location.protocol === 'https:'){
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
+}
+
+newProblem(); recalc(); report();
+})();
+</script>
+</body>
+</html>
