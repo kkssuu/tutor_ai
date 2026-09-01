@@ -1,5 +1,5 @@
 // 오프라인 캐시. 한 번 열어두면 비행기 안에서도 녹화할 수 있다.
-const CACHE = 'ink-capture-v3';
+const CACHE = 'ink-capture-v4';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon.png', './bank.json'];
 
 self.addEventListener('install', e => {
