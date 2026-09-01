@@ -140,6 +140,9 @@
     <div class="row"><span class="k">유형</span><span class="v" id="dType">–</span></div>
     <div class="row"><span class="k">학년</span><span class="v" id="dGrade">–</span></div>
     <div class="row"><span class="k">본 문제 수</span><span class="v" id="dSeen">0</span></div>
+    <div class="row"><span class="k">문제은행</span><span class="v" id="dBank">불러오는 중…</span></div>
+    <p class="note bad" id="bankErr" style="display:none"></p>
+    <button id="retryBank" style="width:100%;margin-top:8px">다시 시도 (캐시 비우기)</button>
   </div>
 
   <div class="card">
@@ -162,6 +165,13 @@
 (() => {
 'use strict';
 const $ = id => document.getElementById(id);
+window.addEventListener('error', ev => {
+  const box = $('bankErr');
+  if (!box) return;
+  box.style.display='block';
+  box.textContent = '스크립트 오류: ' + (ev.message || '') + ' @' + (ev.lineno || '?');
+  $('panel')?.classList.add('open');
+});
 const T0 = performance.now();
 const cv = $('cv'), ctx = cv.getContext('2d'), stage = $('stage');
 
@@ -475,6 +485,16 @@ $('undo').onclick=()=>{
   draw(); readout();
 };
 $('fitBtn').onclick=fit;
+$('retryBank').onclick = async ()=>{
+  try {
+    if (navigator.serviceWorker?.getRegistrations){
+      const rs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(rs.map(r=>r.unregister()));
+    }
+    if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+  } catch(e){}
+  location.reload();
+};
 $('nextProblem').onclick = nextProblem;
 $('prevProblem').onclick = prevProblem;
 $('panelBtn').onclick=()=>$('panel').classList.toggle('open');
@@ -512,14 +532,44 @@ $('exportBtn').onclick=async ()=>{
   a.download=name; a.click(); toast('다운로드 시작');
 };
 
-if ('serviceWorker' in navigator && location.protocol==='https:')
-  navigator.serviceWorker.register('sw.js').catch(()=>{});
+// 샌드박스(미리보기 iframe, blob: 문서 등)에서는 navigator.serviceWorker 가
+// 있는 척하다가 실제로는 undefined 거나 register 가 SecurityError 를 던진다.
+// 여기서 죽으면 그 아래 초기화가 통째로 안 돌아 화면이 빈 채로 남는다.
+try {
+  if (location.protocol === 'https:' && navigator.serviceWorker?.register)
+    navigator.serviceWorker.register('sw.js').catch(()=>{});
+} catch (e) { /* 무시 */ }
 
 
 // ══ 문제은행 ═════════════════════════════════════════════════════════
 let bank = [], picked = null;
-fetch('bank.json').then(r=>r.json()).then(d=>{ bank=d.problems; nextProblem(); })
-  .catch(()=>toast('bank.json 을 못 읽었습니다'));
+// 서비스워커 캐시를 우회해서 받는다. 실패하면 이유를 그대로 보여준다.
+const bankUrl = new URL('bank.json', location.href).href;
+fetch(bankUrl, { cache: 'no-store' })
+  .then(r => {
+    if (!r.ok) throw new Error(`HTTP ${r.status} — ${bankUrl}`);
+    return r.text();
+  })
+  .then(t => {
+    let d;
+    try { d = JSON.parse(t); }
+    catch (e) { throw new Error('JSON 파싱 실패: ' + t.slice(0, 60)); }
+    if (!d.problems || !d.problems.length) throw new Error('problems 배열이 비어 있음');
+    bank = d.problems;
+    $('dBank').textContent = bank.length + '개';
+    nextProblem();
+  })
+  .catch(e => {
+    $('dBank').innerHTML = '<span class="bad">실패</span>';
+    const sandboxed = !/^https?:$/.test(location.protocol);
+    $('bankErr').textContent = sandboxed
+      ? '미리보기 환경에서는 bank.json 을 읽을 수 없습니다. GitHub Pages 주소로 열어주세요. ('
+        + location.protocol + ')'
+      : String(e.message || e);
+    $('bankErr').style.display = 'block';
+    $('panel').classList.add('open');
+    toast('bank.json 을 못 읽었습니다 — 패널 확인');
+  });
 
 const sheet=$('sheet'), sheetBody=$('sheetBody'), sheetTitle=$('sheetTitle');
 function openSheet(title, html){ sheetTitle.textContent=title; sheetBody.innerHTML=html; sheet.classList.remove('hidden'); }
