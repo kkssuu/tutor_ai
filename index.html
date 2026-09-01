@@ -173,9 +173,26 @@
 (() => {
 'use strict';
 const $ = id => document.getElementById(id);
-// 패널 밖에서의 터치 스크롤을 원천 차단한다. 패널 안 세로 스크롤만 허용.
+// 패널·시트 안의 세로 스크롤만 허용하고, 그 밖의 모든 터치 이동은 막는다.
+// overscroll-behavior 만으로는 iOS 고무줄이 남는다. 경계를 직접 검사한다.
+let tStart = null;
+document.addEventListener('touchstart', ev => {
+  const t = ev.touches[0];
+  const sc = ev.target.closest?.('#panel, #sheetBox');
+  tStart = { x:t.clientX, y:t.clientY, sc,
+             top: sc ? sc.scrollTop : 0,
+             max: sc ? sc.scrollHeight - sc.clientHeight : 0 };
+}, { passive:true });
+
 document.addEventListener('touchmove', ev => {
-  if (!ev.target.closest || !ev.target.closest('#panel, #sheet')) ev.preventDefault();
+  const s0 = tStart;
+  if (!s0 || !s0.sc){ ev.preventDefault(); return; }          // 패널 밖 → 전부 차단
+  const t = ev.touches[0];
+  const dx = t.clientX - s0.x, dy = t.clientY - s0.y;
+  if (Math.abs(dx) > Math.abs(dy)){ ev.preventDefault(); return; }   // 좌우 이동 차단
+  if (s0.max <= 0){ ev.preventDefault(); return; }             // 스크롤할 게 없음
+  const st = s0.sc.scrollTop;
+  if ((st <= 0 && dy > 0) || (st >= s0.max && dy < 0)) ev.preventDefault();  // 경계 고무줄 차단
 }, { passive:false });
 document.addEventListener('gesturestart', ev => ev.preventDefault());
 
@@ -206,7 +223,7 @@ function buildLayout(){
     canvasWidthMm,
     stem:   { x0:0.03, y0:0.02, x1: hasAns ? 0.70 : 0.97, y1: 0.02+stemH },
     answer: hasAns ? { x0:0.72, y0:0.02, x1:0.97, y1:0.02+stemH } : null,
-    figure: hasFig ? { id:'f1', x0:0.08, y0:0.18, x1:0.62, y1:0.52 } : null,
+    figure: hasFig ? { id:'f1', x0:0.05, y0:0.18, x1:0.68, y1:0.18+0.63/1.375 } : null,
   };
 }
 
@@ -390,7 +407,8 @@ function fitStemBox(){
   if (Math.abs((layout.stem.y1 - layout.stem.y0) - h) > 0.002){
     layout.stem.y1 = layout.stem.y0 + h;
     if (layout.figure){
-      const fh = 0.34;
+      const fh = 0.63/1.375;   // SVG 뷰박스 비율(220:160)과 맞춰 여백이 생기지 않게
+      layout.figure.x0 = 0.05; layout.figure.x1 = 0.68;
       layout.figure.y0 = layout.stem.y1 + 0.03;
       layout.figure.y1 = layout.figure.y0 + fh;
     }
@@ -601,7 +619,8 @@ $('exportBtn').onclick=()=>{
       // 답은 손글씨가 아니라 확정 입력값으로 남는다. 채점에서 추측할 일이 없다.
       submitted: p.answer ?? null,
       expected: p.bankAnswer ?? null,
-      correct: p.answer && p.bankAnswer
+      // 수기 답에는 value 가 없다. 채점은 나중에 인식기가 한다.
+      correct: (p.answer && typeof p.answer.value === 'string' && p.bankAnswer)
         ? p.answer.value.replace(/\s/g,'') === String(p.bankAnswer).replace(/\s/g,'')
         : null })) };
   const name=out.sittingId+'.ink.json', text=JSON.stringify(out);
