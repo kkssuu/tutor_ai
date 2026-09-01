@@ -27,10 +27,17 @@
   button.ghost{ border-color:transparent; }
   .spacer{ flex:1 }
   #stage{ flex:1; position:relative; touch-action:none; overflow:hidden; }
+  #overlay{ position:absolute; inset:0; pointer-events:none; transform-origin:0 0; }
+  #ovStem, #ovFig{ position:absolute; }
+  #ovStem{ font-size:15px; line-height:1.5 }
+  #ovStem math{ font-size:1.3em }
+  #ovFig svg{ width:100%; height:100%; stroke:currentColor; fill:none;
+              stroke-width:1.6; overflow:visible }
+  #ovFig svg text{ stroke:none; fill:currentColor; font-size:11px }
   #cv{ position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none; }
   #hud{ position:absolute; left:10px; bottom:10px; font-size:12px; color:var(--dim);
         background:var(--panel); padding:5px 9px; border-radius:8px; opacity:.9 }
-  aside{ position:fixed; top:var(--top); bottom:var(--bot); left:0; width:min(340px,92vw); z-index:9;
+  aside{ overscroll-behavior:contain; touch-action:pan-y; position:fixed; top:var(--top); bottom:var(--bot); left:0; width:min(340px,92vw); z-index:9;
          background:var(--panel); border-right:1px solid var(--line); overflow:auto; padding:12px;
          transform:translateX(-102%); transition:transform .22s; font-size:14px; }
   aside.open{ transform:none; }
@@ -79,13 +86,13 @@
   <button id="eraseMode">지우개</button>
   <button id="undo" class="ghost">되돌리기</button>
   <span class="spacer"></span>
-  <button id="pickBtn">문제 고르기</button>
+  <button id="prevProblem" class="ghost">← 이전</button>
   <button id="fitBtn" class="ghost">전체보기</button>
-  <button id="nextProblem">다음 문제</button>
+  <button id="nextProblem">다음 문제 →</button>
   <button id="exportBtn" class="on">내보내기</button>
 </header>
 
-<div id="stage"><canvas id="cv"></canvas><div id="hud">–</div></div>
+<div id="stage"><div id="overlay"></div><canvas id="cv"></canvas><div id="hud">–</div></div>
 
 <aside id="panel">
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
@@ -129,11 +136,10 @@
   </div>
 
   <div class="card">
-    <b>문제</b>
-    <textarea id="edit" rows="3">다음 방정식을 푸시오.
-3x + 5 = 20</textarea>
-    <label><input type="checkbox" id="showFig"> 도형 넣기 (위에 직접 그려보기)</label>
-    <label><input type="checkbox" id="showAns" checked> 답란 표시</label>
+    <b>현재 문제</b>
+    <div class="row"><span class="k">유형</span><span class="v" id="dType">–</span></div>
+    <div class="row"><span class="k">학년</span><span class="v" id="dGrade">–</span></div>
+    <div class="row"><span class="k">본 문제 수</span><span class="v" id="dSeen">0</span></div>
   </div>
 
   <div class="card">
@@ -169,7 +175,8 @@ let pxPerMm = 1, canvasWidthMm = 200;
 let layout = null;
 
 function buildLayout(){
-  const hasFig = $('showFig').checked, hasAns = $('showAns').checked;
+  const hasFig = picked ? picked.blocks.some(b=>b.t==='figure') : false;
+  const hasAns = true;
   const stemH = 0.13;
   layout = {
     canvasWidthMm,
@@ -194,8 +201,8 @@ function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show');
 function newProblem(){
   const id='p'+String(problems.length+1).padStart(2,'0');
   buildLayout();
-  cur={ problemId:id, gradeBand:'m1', checkReply:'ok', note:'실기기 녹화',
-        layout:JSON.parse(JSON.stringify(layout)), stem:$('edit').value, ops:[] };
+  cur={ problemId:id, gradeBand: picked?.grade ?? 'm1', checkReply:'ok', note:'실기기 녹화',
+        layout:JSON.parse(JSON.stringify(layout)), ops:[] };
   problems.push(cur); $('dProb').textContent=id;
   live.clear(); heights=[]; maxY=0; fit();
 }
@@ -208,7 +215,10 @@ function resize(){
   ctx.lineCap = ctx.lineJoin = 'round';
   draw(); readout();
 }
-function fit(){ view.scale = stage.clientWidth; view.panX=0; view.panY=0; draw(); readout(); }
+// 전체보기보다 더 축소되지 않게, 확대는 1U = 600mm 까지만.
+function fitScale(){ return stage.clientWidth; }
+function clampScale(s){ return Math.max(fitScale(), Math.min(600*pxPerMm, s)); }
+function fit(){ view.scale = fitScale(); view.panX=0; view.panY=0; draw(); readout(); }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', ()=>setTimeout(resize,250));
 
@@ -235,13 +245,6 @@ function draw(){
   const ink = getComputedStyle(document.body).color;
 
   box(layout.stem,false);
-  const s0 = toScreen({x:layout.stem.x0,y:layout.stem.y0});
-  ctx.fillStyle = ink;
-  (cur?.stem ?? '').split('\n').forEach((ln,i)=>{
-    ctx.font = i===0 ? view.scale*0.024+'px -apple-system,sans-serif'
-                     : view.scale*0.030+'px ui-monospace,Menlo,monospace';
-    ctx.fillText(ln, s0.x+10, s0.y+view.scale*(0.042+i*0.042));
-  });
 
   if (layout.answer){
     box(layout.answer, true, cur?.answer ? '답' : '답 (눌러서 입력)');
@@ -255,15 +258,8 @@ function draw(){
     }
   }
 
-  if (layout.figure){
-    const f=layout.figure; box(f,false,'도형 — 위에 그려보세요');
-    const a=toScreen({x:f.x0,y:f.y0}), b=toScreen({x:f.x1,y:f.y1});
-    ctx.save(); ctx.strokeStyle=ink; ctx.lineWidth=1.6; ctx.beginPath();
-    ctx.moveTo(a.x+(b.x-a.x)*0.12, b.y-(b.y-a.y)*0.18);
-    ctx.lineTo(a.x+(b.x-a.x)*0.88, b.y-(b.y-a.y)*0.18);
-    ctx.lineTo(a.x+(b.x-a.x)*0.62, a.y+(b.y-a.y)*0.20);
-    ctx.closePath(); ctx.stroke(); ctx.restore();
-  }
+  if (layout.figure) box(layout.figure,false,null);
+  syncOverlay();
 
   ctx.strokeStyle = ink;
   ctx.lineWidth = Math.max(1, 0.0022*view.scale);
@@ -273,6 +269,41 @@ function draw(){
     st.points.forEach((p,i)=>{ const q=toScreen(p); i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); });
     ctx.stroke();
   }
+}
+
+// 지문과 도형은 캔버스가 아니라 HTML 오버레이가 그린다.
+// MathML(수식)과 SVG(도형)를 브라우저가 직접 렌더하게 하려는 것이다.
+// 외부 라이브러리 없이 사파리가 그대로 그린다.
+function syncOverlay(){
+  const ov=$('overlay'); if (!layout) return;
+  ov.style.transform = `translate(${-view.panX*view.scale}px, ${-view.panY*view.scale}px) scale(${view.scale})`;
+  const st=$('ovStem'), fg=$('ovFig');
+  if (st){
+    st.style.left=layout.stem.x0+'px'; st.style.top=layout.stem.y0+'px';
+    st.style.width=(layout.stem.x1-layout.stem.x0)+'px';
+    st.style.height=(layout.stem.y1-layout.stem.y0)+'px';
+    st.style.fontSize='0.030px'; st.style.padding='0.012px 0.016px';
+  }
+  if (fg && layout.figure){
+    fg.style.left=layout.figure.x0+'px'; fg.style.top=layout.figure.y0+'px';
+    fg.style.width=(layout.figure.x1-layout.figure.x0)+'px';
+    fg.style.height=(layout.figure.y1-layout.figure.y0)+'px';
+    fg.style.display='block';
+  } else if (fg) fg.style.display='none';
+}
+
+function renderProblem(){
+  const p=picked;
+  const stemHtml = p
+    ? p.blocks.filter(b=>b.t!=='figure').map(b=>
+        b.t==='math' ? `<div><math xmlns="http://www.w3.org/1998/Math/MathML">${b.ml}</math></div>`
+                     : `<div>${b.v}</div>`).join('')
+    : '<div>문제를 불러오는 중…</div>';
+  const f = p && p.blocks.find(b=>b.t==='figure');
+  $('overlay').innerHTML =
+    `<div id="ovStem">${stemHtml}</div>` +
+    (f ? `<div id="ovFig"><svg viewBox="${f.viewBox}" preserveAspectRatio="xMidYMid meet">${f.svg}</svg></div>` : '');
+  syncOverlay();
 }
 
 // ── 입력: 펜은 필기, 손가락은 이동·확대 ────────────────────────────────
@@ -319,7 +350,7 @@ cv.addEventListener('pointermove', e=>{
       // 절대 배율(화면에 보이는 캔버스 폭 0.15U ~ 2.5U)로 잠근다.
       const k = Math.hypot(a.x-b.x,a.y-b.y)/pinch.d;
       const W = stage.clientWidth;
-      const ns = Math.max(W/2.5, Math.min(W/0.15, pinch.scale*k));
+      const ns = clampScale(pinch.scale*k);
       const r = cv.getBoundingClientRect();
       const ux = pinch.panX + (pinch.cx-r.left)/pinch.scale;
       const uy = pinch.panY + (pinch.cy-r.top)/pinch.scale;
@@ -427,6 +458,9 @@ function readout(){
   $('dCoal').innerHTML=diag.coalesced?'<span class="good">있음</span>':'<span class="bad">없음</span>';
   $('dRate').textContent=rates.length?Math.round(med(rates))+' Hz':'–';
   $('dOps').textContent=problems.reduce((a,p)=>a+p.ops.length,0);
+  $('dType').textContent=picked?picked.title:'–';
+  $('dGrade').textContent=picked?picked.grade:'–';
+  $('dSeen').textContent=history.length;
   $('hud').textContent=`1U = ${mmPerU().toFixed(0)}mm 화면 · 획 ${n}` + (g>0?` · 글씨 ${(g*mmPerU()).toFixed(1)}mm`:'');
 }
 
@@ -441,13 +475,11 @@ $('undo').onclick=()=>{
   draw(); readout();
 };
 $('fitBtn').onclick=fit;
-$('nextProblem').onclick=()=>{ newProblem(); toast('새 문제'); };
+$('nextProblem').onclick = nextProblem;
+$('prevProblem').onclick = prevProblem;
 $('panelBtn').onclick=()=>$('panel').classList.toggle('open');
 $('closePanel').onclick=()=>$('panel').classList.remove('open');
-$('edit').oninput=()=>{ if (cur) cur.stem=$('edit').value; draw(); };
-$('showFig').onchange=$('showAns').onchange=()=>{
-  buildLayout(); if (cur) cur.layout=JSON.parse(JSON.stringify(layout)); draw();
-};
+
 
 $('exportBtn').onclick=async ()=>{
   const done=problems.filter(p=>p.ops.length);
@@ -486,7 +518,7 @@ if ('serviceWorker' in navigator && location.protocol==='https:')
 
 // ══ 문제은행 ═════════════════════════════════════════════════════════
 let bank = [], picked = null;
-fetch('bank.json').then(r=>r.json()).then(d=>{ bank=d.problems; })
+fetch('bank.json').then(r=>r.json()).then(d=>{ bank=d.problems; nextProblem(); })
   .catch(()=>toast('bank.json 을 못 읽었습니다'));
 
 const sheet=$('sheet'), sheetBody=$('sheetBody'), sheetTitle=$('sheetTitle');
@@ -495,24 +527,29 @@ function closeSheet(){ sheet.classList.add('hidden'); }
 $('sheetClose').onclick = closeSheet;
 sheet.addEventListener('pointerdown', e=>{ if (e.target===sheet) closeSheet(); });
 
-$('pickBtn').onclick = ()=>{
-  if (!bank.length){ toast('문제은행 로딩 중'); return; }
-  const html = '<div class="plist">' + bank.map((p,i)=>
-    `<button data-i="${i}"><span class="g">${p.grade} · ${p.title}</span><br>${p.stem.join('  ')}</button>`
-  ).join('') + '</div>';
-  openSheet('문제 고르기 ('+bank.length+'개)', html);
-  sheetBody.querySelectorAll('button[data-i]').forEach(b=>{
-    b.onclick = ()=>{ pick(bank[+b.dataset.i]); closeSheet(); };
-  });
-};
+// 문제는 무작위로 뽑는다. 지나온 것은 이전 버튼으로 되돌아갈 수 있다.
+let history = [], hpos = -1;
 
 function pick(p){
   picked = p;
-  $('edit').value = p.stem.join('\n');
   newProblem();
-  cur.bankTypeId = p.typeId; cur.bankAnswer = p.answer; cur.kind = p.kind;
-  cur.choices = p.choices || null;
+  cur.bankTypeId=p.typeId; cur.bankAnswer=p.answer; cur.kind=p.kind;
+  cur.choices=p.choices||null; cur.title=p.title; cur.grade=p.grade;
+  cur.hasFigure = p.blocks.some(b=>b.t==='figure');
+  renderProblem();
   toast(`${p.grade} · ${p.title}`);
+}
+
+function nextProblem(){
+  if (!bank.length){ toast('문제은행 로딩 중'); return; }
+  if (hpos < history.length-1){ hpos++; pick(history[hpos]); return; }
+  let p, guard=0;
+  do { p = bank[Math.floor(Math.random()*bank.length)]; } while (p===picked && ++guard<10);
+  history.push(p); hpos = history.length-1; pick(p);
+}
+function prevProblem(){
+  if (hpos<=0){ toast('첫 문제입니다'); return; }
+  hpos--; pick(history[hpos]);
 }
 
 // ══ 답란 팝업 ════════════════════════════════════════════════════════
@@ -532,15 +569,10 @@ function openAnswer(){
     });
   } else {
     openSheet('답 입력',
-      '<input id="ansInput" inputmode="text" autocomplete="off" placeholder="예: x=5">' +
-      '<div class="keys">' + ['x','=','/','√','^','(',')','-','+',','].map(k=>
-        `<button data-k="${k}">${k}</button>`).join('') + '</div>' +
+      '<input id="ansInput" autocomplete="off" placeholder="답을 입력하세요">' +
       '<div class="keys" style="grid-template-columns:1fr 1fr"><button id="ansClear">지우기</button>' +
       '<button id="ansOk" class="on" style="background:var(--ink);color:var(--bg)">확인</button></div>');
     const inp = $('ansInput'); inp.focus();
-    sheetBody.querySelectorAll('button[data-k]').forEach(b=>{
-      b.onclick = ()=>{ inp.value += b.dataset.k; inp.focus(); };
-    });
     $('ansClear').onclick = ()=>{ inp.value=''; inp.focus(); };
     $('ansOk').onclick = ()=> submitAnswer(inp.value.trim());
   }
