@@ -46,6 +46,25 @@
             align-items:center; justify-content:center; color:var(--warn); font-size:12px }
   textarea{ width:100%; font:inherit; border:1px solid var(--line); border-radius:10px; padding:8px;
             background:var(--bg); color:var(--ink); -webkit-user-select:text; user-select:text }
+  #sheet{ position:fixed; inset:0; z-index:11; background:rgba(0,0,0,.35);
+          display:flex; align-items:flex-end; justify-content:center; }
+  #sheet.hidden{ display:none }
+  #sheetBox{ background:var(--bg); width:min(560px,100%); border-radius:16px 16px 0 0;
+             padding:16px 16px calc(20px + var(--bot)); max-height:82vh; overflow:auto; }
+  #sheetHead{ display:flex; align-items:center; gap:8px; margin-bottom:12px }
+  #sheetHead b{ flex:1; font-size:17px }
+  .choices{ display:flex; gap:14px; justify-content:center; margin:8px 0 4px }
+  .choice{ width:62px; height:62px; border-radius:50%; border:2px solid var(--line);
+           background:var(--bg); color:var(--ink); font-size:22px; font-weight:600 }
+  .choice.sel{ background:var(--ink); color:var(--bg); border-color:var(--ink) }
+  #ansInput{ width:100%; font-size:26px; text-align:center; padding:14px; border-radius:12px;
+             border:1px solid var(--line); background:var(--bg); color:var(--ink);
+             -webkit-user-select:text; user-select:text }
+  .keys{ display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-top:10px }
+  .keys button{ min-height:48px; font-size:18px }
+  .plist{ display:flex; flex-direction:column; gap:6px }
+  .plist button{ text-align:left; width:100%; min-height:auto; padding:10px 12px }
+  .plist .g{ color:var(--dim); font-size:12px }
   #toast{ position:fixed; left:50%; bottom:calc(22px + var(--bot)); transform:translateX(-50%);
           background:var(--ink); color:var(--bg); padding:10px 16px; border-radius:20px;
           opacity:0; pointer-events:none; transition:opacity .2s; z-index:10; font-size:14px }
@@ -60,6 +79,7 @@
   <button id="eraseMode">지우개</button>
   <button id="undo" class="ghost">되돌리기</button>
   <span class="spacer"></span>
+  <button id="pickBtn">문제 고르기</button>
   <button id="fitBtn" class="ghost">전체보기</button>
   <button id="nextProblem">다음 문제</button>
   <button id="exportBtn" class="on">내보내기</button>
@@ -122,6 +142,13 @@
     <div class="row"><span class="k">누적 op</span><span class="v" id="dOps">0</span></div>
   </div>
 </aside>
+
+<div id="sheet" class="hidden">
+  <div id="sheetBox">
+    <div id="sheetHead"><b id="sheetTitle">답 입력</b><button class="ghost" id="sheetClose">닫기</button></div>
+    <div id="sheetBody"></div>
+  </div>
+</div>
 
 <div id="toast"></div>
 
@@ -216,7 +243,17 @@ function draw(){
     ctx.fillText(ln, s0.x+10, s0.y+view.scale*(0.042+i*0.042));
   });
 
-  if (layout.answer) box(layout.answer,true,'답');
+  if (layout.answer){
+    box(layout.answer, true, cur?.answer ? '답' : '답 (눌러서 입력)');
+    if (cur?.answer){
+      const a=toScreen({x:layout.answer.x0,y:layout.answer.y0});
+      const b=toScreen({x:layout.answer.x1,y:layout.answer.y1});
+      ctx.save(); ctx.fillStyle=ink; ctx.textAlign='center';
+      ctx.font = view.scale*0.045+'px ui-monospace,Menlo,monospace';
+      ctx.fillText(cur.answer.value, (a.x+b.x)/2, (a.y+b.y)/2 + view.scale*0.018);
+      ctx.restore();
+    }
+  }
 
   if (layout.figure){
     const f=layout.figure; box(f,false,'도형 — 위에 그려보세요');
@@ -278,8 +315,12 @@ cv.addEventListener('pointermove', e=>{
     }
     if (touches.size===2 && pinch){
       const [a,b]=[...touches.values()];
-      const k = Math.max(0.25, Math.min(8, Math.hypot(a.x-b.x,a.y-b.y)/pinch.d));
-      const ns = pinch.scale*k, r = cv.getBoundingClientRect();
+      // 제스처마다 상대 배율만 제한하면 반복할수록 누적돼 끝없이 확대/축소된다.
+      // 절대 배율(화면에 보이는 캔버스 폭 0.15U ~ 2.5U)로 잠근다.
+      const k = Math.hypot(a.x-b.x,a.y-b.y)/pinch.d;
+      const W = stage.clientWidth;
+      const ns = Math.max(W/2.5, Math.min(W/0.15, pinch.scale*k));
+      const r = cv.getBoundingClientRect();
       const ux = pinch.panX + (pinch.cx-r.left)/pinch.scale;
       const uy = pinch.panY + (pinch.cy-r.top)/pinch.scale;
       view.scale = ns;
@@ -421,7 +462,13 @@ $('exportBtn').onclick=async ()=>{
         pressure:diag.pressure, tilt:diag.tilt, coalesced:diag.coalesced,
         sampleRateHz: rates.length?Math.round(med(rates)):null } },
     profile:{ id:'rec', frustrationThresholdMs:300000, baselineSpeed:0.00021 },
-    problems: done };
+    problems: done.map(p => ({ ...p,
+      // 답은 손글씨가 아니라 확정 입력값으로 남는다. 채점에서 추측할 일이 없다.
+      submitted: p.answer ?? null,
+      expected: p.bankAnswer ?? null,
+      correct: p.answer && p.bankAnswer
+        ? p.answer.value.replace(/\s/g,'') === String(p.bankAnswer).replace(/\s/g,'')
+        : null })) };
   const name=out.sittingId+'.ink.json', text=JSON.stringify(out);
   const file=new File([text],name,{type:'application/json'});
   if (navigator.canShare && navigator.canShare({files:[file]})){
@@ -435,6 +482,86 @@ $('exportBtn').onclick=async ()=>{
 
 if ('serviceWorker' in navigator && location.protocol==='https:')
   navigator.serviceWorker.register('sw.js').catch(()=>{});
+
+
+// ══ 문제은행 ═════════════════════════════════════════════════════════
+let bank = [], picked = null;
+fetch('bank.json').then(r=>r.json()).then(d=>{ bank=d.problems; })
+  .catch(()=>toast('bank.json 을 못 읽었습니다'));
+
+const sheet=$('sheet'), sheetBody=$('sheetBody'), sheetTitle=$('sheetTitle');
+function openSheet(title, html){ sheetTitle.textContent=title; sheetBody.innerHTML=html; sheet.classList.remove('hidden'); }
+function closeSheet(){ sheet.classList.add('hidden'); }
+$('sheetClose').onclick = closeSheet;
+sheet.addEventListener('pointerdown', e=>{ if (e.target===sheet) closeSheet(); });
+
+$('pickBtn').onclick = ()=>{
+  if (!bank.length){ toast('문제은행 로딩 중'); return; }
+  const html = '<div class="plist">' + bank.map((p,i)=>
+    `<button data-i="${i}"><span class="g">${p.grade} · ${p.title}</span><br>${p.stem.join('  ')}</button>`
+  ).join('') + '</div>';
+  openSheet('문제 고르기 ('+bank.length+'개)', html);
+  sheetBody.querySelectorAll('button[data-i]').forEach(b=>{
+    b.onclick = ()=>{ pick(bank[+b.dataset.i]); closeSheet(); };
+  });
+};
+
+function pick(p){
+  picked = p;
+  $('edit').value = p.stem.join('\n');
+  newProblem();
+  cur.bankTypeId = p.typeId; cur.bankAnswer = p.answer; cur.kind = p.kind;
+  cur.choices = p.choices || null;
+  toast(`${p.grade} · ${p.title}`);
+}
+
+// ══ 답란 팝업 ════════════════════════════════════════════════════════
+// 답은 손글씨로 받지 않는다. 객관식은 번호를 누르고, 주관식은 입력한다.
+// 중간 풀이는 필기, 최종 답은 확정 입력 — 채점에서 추측할 일이 없어진다.
+function openAnswer(){
+  if (!cur) return;
+  const objective = cur.kind === 'objective' && cur.choices;
+  if (objective){
+    const html = '<div class="choices">' + cur.choices.map((c,i)=>
+      `<button class="choice" data-v="${encodeURIComponent(c)}">${i+1}</button>`).join('') + '</div>'
+      + '<div style="text-align:center;color:var(--dim);font-size:13px;margin-top:6px">'
+      + cur.choices.map((c,i)=>`${i+1}. ${c}`).join('&nbsp;&nbsp;') + '</div>';
+    openSheet('답 고르기', html);
+    sheetBody.querySelectorAll('.choice').forEach(b=>{
+      b.onclick = ()=>{ submitAnswer(decodeURIComponent(b.dataset.v)); };
+    });
+  } else {
+    openSheet('답 입력',
+      '<input id="ansInput" inputmode="text" autocomplete="off" placeholder="예: x=5">' +
+      '<div class="keys">' + ['x','=','/','√','^','(',')','-','+',','].map(k=>
+        `<button data-k="${k}">${k}</button>`).join('') + '</div>' +
+      '<div class="keys" style="grid-template-columns:1fr 1fr"><button id="ansClear">지우기</button>' +
+      '<button id="ansOk" class="on" style="background:var(--ink);color:var(--bg)">확인</button></div>');
+    const inp = $('ansInput'); inp.focus();
+    sheetBody.querySelectorAll('button[data-k]').forEach(b=>{
+      b.onclick = ()=>{ inp.value += b.dataset.k; inp.focus(); };
+    });
+    $('ansClear').onclick = ()=>{ inp.value=''; inp.focus(); };
+    $('ansOk').onclick = ()=> submitAnswer(inp.value.trim());
+  }
+}
+
+function submitAnswer(v){
+  if (!v){ toast('답을 입력하세요'); return; }
+  cur.answer = { value:v, atMs: Math.round(performance.now()-T0),
+                 kind: cur.kind || 'subjective' };
+  closeSheet(); draw(); readout();
+  toast('답: ' + v);
+}
+
+// 답란을 누르면 팝업이 뜬다 (펜이든 손가락이든)
+stage.addEventListener('pointerup', e=>{
+  if (!layout || !layout.answer || active) return;
+  const r = cv.getBoundingClientRect();
+  const u = fromScreen(e.clientX-r.left, e.clientY-r.top);
+  const a = layout.answer;
+  if (u.x>=a.x0 && u.x<=a.x1 && u.y>=a.y0 && u.y<=a.y1) openAnswer();
+});
 
 newProblem(); resize(); recalc();
 })();
